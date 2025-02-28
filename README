@@ -1,0 +1,37 @@
+# Hue Logger
+
+Hue Logger is a Go package that provides a custom log handler for pretty formatted logs using the `log/slog` package and charmbraclets `lipgloss` for styling.
+
+## Installation
+
+To install the package, run:
+
+```sh
+go get github.com/smc13/hue
+```
+
+## Usage
+
+```go
+logger := slog.New(hue.NewHueHandler(os.Stderr, &hue.Options{
+  Level: slog.LevelDebug,
+}))
+```
+
+### Custom attribute styling
+
+You can provide custom styling for your attribute keys by implementing the
+`hue.StyledAttr` interface:
+
+```go
+type serviceAttr string
+
+// Style implements the hue.StyledAttr interface
+func (s serviceAttr) Style() lipgloss.Style {
+	return serviceAttrStyle
+}
+
+func Service(name string) slog.Attr {
+	return slog.Any(ServiceKey, serviceAttr(name))
+}
+```
