@@ -11,6 +11,11 @@ import (
 	"time"
 )
 
+const (
+	DefaultTimeFormat = time.TimeOnly
+	DefaultLogLevel   = slog.LevelInfo
+)
+
 type hueHandler struct {
 	writer io.Writer
 	mx     sync.Mutex
@@ -162,7 +167,7 @@ func (h *hueHandler) writeAttr(buf *buffer, attr slog.Attr, prefix string) {
 
 func (h *hueHandler) writeAttrKey(buf *buffer, attr slog.Attr, prefix string) {
 	style := attrStyle
-	if styledVal, ok := attr.Value.Any().(StyledValue); ok {
+	if styledVal, ok := attr.Value.Any().(StyledAttr); ok {
 		style = styledVal.Style()
 	}
 

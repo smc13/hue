@@ -6,11 +6,12 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-type StyledValue interface {
+const ErrKey = "err"
+const ServiceKey = "service"
+
+type StyledAttr interface {
 	Style() lipgloss.Style
 }
-
-const ErrKey = "err"
 
 type errorAttr struct{ error }
 
@@ -23,5 +24,16 @@ func Err(err error) slog.Attr {
 }
 
 func (e errorAttr) Style() lipgloss.Style {
-	return errorLevelStyle.Faint(true)
+	return errorAttrStyle
+}
+
+// serviceAttr is a custom slog.Attr that is used to style service names.
+type serviceAttr string
+
+func (s serviceAttr) Style() lipgloss.Style {
+	return serviceAttrStyle
+}
+
+func Service(name string) slog.Attr {
+	return slog.Any(ServiceKey, serviceAttr(name))
 }

@@ -1,15 +1,7 @@
 package hue
 
 import (
-	"log/slog"
-	"time"
-
 	"github.com/charmbracelet/lipgloss"
-)
-
-const (
-	DefaultTimeFormat = time.TimeOnly
-	DefaultLogLevel   = slog.LevelInfo
 )
 
 var (
@@ -20,4 +12,7 @@ var (
 	infoLevelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("123"))
 	warnLevelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
 	errorLevelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+
+	errorAttrStyle   = errorLevelStyle.Faint(true)
+	serviceAttrStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("219"))
 )
