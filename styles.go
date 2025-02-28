@@ -11,8 +11,8 @@ var (
 	debugLevelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
 	infoLevelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("40"))
 	warnLevelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
-	errorLevelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("4"))
+	errorLevelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 
 	errorAttrStyle   = errorLevelStyle.Faint(true)
-	serviceAttrStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("219"))
+	serviceAttrStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("4"))
 )
