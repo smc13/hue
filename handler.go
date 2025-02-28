@@ -25,6 +25,7 @@ type hueHandler struct {
 	replaceAttr func(groups []string, a slog.Attr) slog.Attr
 
 	group string
+	attrs string
 }
 
 // NewHueHandler creates a [slog.Handler] that writes pretty formatted logs to the given writer.
@@ -76,6 +77,9 @@ func (h *hueHandler) Handle(ctx context.Context, rec slog.Record) error {
 	buf.WriteString(rec.Message)
 	buf.WriteString(" ")
 
+	// write stored (pre-formatted) attributes
+	buf.WriteString(h.attrs)
+
 	rec.Attrs(func(a slog.Attr) bool {
 		h.writeAttr(buf, a, h.group)
 		return true
@@ -92,7 +96,24 @@ func (h *hueHandler) Handle(ctx context.Context, rec slog.Record) error {
 
 // WithAttrs implements slog.Handler.
 func (h *hueHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	panic("unimplemented")
+	if len(attrs) == 0 {
+		return h
+	}
+
+	buf := &buffer{}
+	for _, a := range attrs {
+		h.writeAttr(buf, a, "")
+		buf.WriteString(" ")
+	}
+
+	return &hueHandler{
+		writer:      h.writer,
+		level:       h.level,
+		timeFormat:  h.timeFormat,
+		replaceAttr: h.replaceAttr,
+		group:       h.group,
+		attrs:       h.attrs + string(*buf),
+	}
 }
 
 // WithGroup implements slog.Handler.
