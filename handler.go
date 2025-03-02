@@ -237,7 +237,7 @@ func (h *hueHandler) writeAttrValue(buf *buffer, attr slog.Attr) {
 		case fmt.Stringer:
 			*buf = append(*buf, style.Render(strconv.Quote(avt.String()))...)
 		default:
-			*buf = append(*buf, style.Render(fmt.Sprintf("%+v", avt))...)
+			*buf = append(*buf, style.Render(strconv.Quote(fmt.Sprintf("%+v", avt)))...)
 		}
 	}
 }
