@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -23,6 +25,7 @@ type hueHandler struct {
 	level       slog.Level
 	timeFormat  string
 	replaceAttr func(groups []string, a slog.Attr) slog.Attr
+	withCaller  bool
 
 	group string
 	attrs string
@@ -41,6 +44,7 @@ func NewHueHandler(writer io.Writer, options *Options) slog.Handler {
 	}
 
 	h.replaceAttr = options.ReplaceAttr
+	h.withCaller = options.WithCaller
 
 	if options.TimeFormat != "" {
 		h.timeFormat = options.TimeFormat
@@ -73,6 +77,11 @@ func (h *hueHandler) Handle(ctx context.Context, rec slog.Record) error {
 	h.writeLevel(buf, rec.Level)
 	buf.WriteString(" ")
 
+	if h.withCaller {
+		h.writeCaller(buf, rec.PC)
+		buf.WriteString(" ")
+	}
+
 	// write the message
 	buf.WriteString(rec.Message)
 	buf.WriteString(" ")
@@ -103,7 +112,6 @@ func (h *hueHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	buf := &buffer{}
 	for _, a := range attrs {
 		h.writeAttr(buf, a, "")
-		buf.WriteString(" ")
 	}
 
 	return &hueHandler{
@@ -142,7 +150,7 @@ func (h *hueHandler) writeTime(buf *buffer, t time.Time) {
 		}
 	}
 
-	buf.WriteString(timeStyle.Render(t.Format(h.timeFormat)))
+	buf.WriteString(mutedStyle.Render(t.Format(h.timeFormat)))
 }
 
 func (h *hueHandler) writeLevel(buf *buffer, level slog.Level) {
@@ -225,4 +233,28 @@ func (h *hueHandler) writeAttrValue(buf *buffer, attr slog.Attr) {
 			*buf = strconv.AppendQuote(*buf, fmt.Sprintf("%+v", avt))
 		}
 	}
+}
+
+func (h *hueHandler) writeCaller(buf *buffer, pc uintptr) {
+	// grab the caller from the stack
+	frames := runtime.CallersFrames([]uintptr{pc})
+	frame, _ := frames.Next()
+
+	src := slog.Source{
+		Function: frame.Function,
+		File:     frame.File,
+		Line:     frame.Line,
+	}
+
+	if h.replaceAttr != nil {
+		attr := h.replaceAttr(nil, slog.Any("caller", &src))
+		if v, ok := attr.Value.Any().(*slog.Source); ok {
+			src = *v
+		}
+	}
+
+	_, file := filepath.Split(src.File)
+
+	// write the caller
+	buf.WriteString(mutedStyle.Render(fmt.Sprintf("<%s:%d>", file, src.Line)))
 }

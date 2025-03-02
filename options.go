@@ -7,4 +7,5 @@ type Options struct {
 	TimeFormat    string
 	SupportsColor bool
 	ReplaceAttr   func(groups []string, a slog.Attr) slog.Attr
+	WithCaller    bool
 }

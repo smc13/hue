@@ -5,8 +5,8 @@ import (
 )
 
 var (
-	timeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
-	attrStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	mutedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	attrStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
 
 	debugLevelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
 	infoLevelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("40"))
