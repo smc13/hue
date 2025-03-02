@@ -5,10 +5,10 @@ import (
 )
 
 var (
-	mutedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("242"))
-	attrStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("242"))
+	mutedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	attrStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 
-	debugLevelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
+	debugLevelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("248"))
 	infoLevelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("155"))
 	warnLevelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
 	errorLevelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))

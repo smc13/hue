@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 const (
@@ -197,28 +199,33 @@ func (h *hueHandler) writeAttr(buf *buffer, attr slog.Attr, prefix string) {
 func (h *hueHandler) writeAttrKey(buf *buffer, attr slog.Attr, prefix string) {
 	style := attrStyle
 	if styledVal, ok := attr.Value.Any().(StyledAttr); ok {
-		style = styledVal.Style()
+		style = styledVal.Style().Faint(true)
 	}
 
 	buf.WriteString(style.Render(fmt.Sprintf("%s=", prefix+attr.Key)))
 }
 
 func (h *hueHandler) writeAttrValue(buf *buffer, attr slog.Attr) {
+	style := lipgloss.NewStyle()
+	if styledVal, ok := attr.Value.Any().(StyledAttr); ok {
+		style = styledVal.Style()
+	}
+
 	switch attr.Value.Kind() {
 	case slog.KindString:
-		*buf = strconv.AppendQuote(*buf, attr.Value.String())
+		*buf = append(*buf, style.Render(strconv.Quote(attr.Value.String()))...)
 	case slog.KindBool:
-		*buf = strconv.AppendBool(*buf, attr.Value.Bool())
+		*buf = append(*buf, style.Render(strconv.FormatBool(attr.Value.Bool()))...)
 	case slog.KindInt64:
-		*buf = strconv.AppendInt(*buf, attr.Value.Int64(), 10)
+		*buf = append(*buf, style.Render(strconv.FormatInt(attr.Value.Int64(), 10))...)
 	case slog.KindUint64:
-		*buf = strconv.AppendUint(*buf, attr.Value.Uint64(), 10)
+		*buf = append(*buf, style.Render(strconv.FormatUint(attr.Value.Uint64(), 10))...)
 	case slog.KindFloat64:
-		*buf = strconv.AppendFloat(*buf, attr.Value.Float64(), 'f', -1, 64)
+		*buf = append(*buf, style.Render(strconv.FormatFloat(attr.Value.Float64(), 'f', -1, 64))...)
 	case slog.KindTime:
-		*buf = strconv.AppendQuote(*buf, attr.Value.Time().String())
+		*buf = append(*buf, style.Render(strconv.Quote(attr.Value.Time().String()))...)
 	case slog.KindDuration:
-		*buf = append(*buf, attr.Value.Duration().String()...)
+		*buf = append(*buf, style.Render(attr.Value.Duration().String())...)
 	case slog.KindAny:
 		switch avt := attr.Value.Any().(type) {
 		case encoding.TextMarshaler:
@@ -226,11 +233,11 @@ func (h *hueHandler) writeAttrValue(buf *buffer, attr slog.Attr) {
 			if err != nil {
 				break
 			}
-			*buf = strconv.AppendQuote(*buf, string(enc))
+			*buf = append(*buf, style.Render(strconv.Quote(string(enc)))...)
 		case fmt.Stringer:
-			*buf = strconv.AppendQuote(*buf, avt.String())
+			*buf = append(*buf, style.Render(strconv.Quote(avt.String()))...)
 		default:
-			*buf = strconv.AppendQuote(*buf, fmt.Sprintf("%+v", avt))
+			*buf = append(*buf, style.Render(fmt.Sprintf("%+v", avt))...)
 		}
 	}
 }
