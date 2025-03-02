@@ -200,7 +200,7 @@ func (h *hueHandler) writeAttrKey(buf *buffer, attr slog.Attr, prefix string) {
 		style = styledVal.Style()
 	}
 
-	buf.WriteString(fmt.Sprintf("%s=", style.Render(prefix+attr.Key)))
+	buf.WriteString(style.Render(fmt.Sprintf("%s=", prefix+attr.Key)))
 }
 
 func (h *hueHandler) writeAttrValue(buf *buffer, attr slog.Attr) {
