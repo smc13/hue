@@ -71,7 +71,7 @@ func (h *hueHandler) Handle(ctx context.Context, rec slog.Record) error {
 	buf := &buffer{}
 
 	rec.AddAttrs(h.attrs...)
-	
+
 	// write the time
 	if !rec.Time.IsZero() {
 		rec.Time.Round(0)
@@ -121,6 +121,8 @@ func (h *hueHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 		level:       h.level,
 		timeFormat:  h.timeFormat,
 		replaceAttr: h.replaceAttr,
+		withCaller:  h.withCaller,
+		withPrefix:  h.withPrefix,
 		group:       h.group,
 		attrs:       append(h.attrs, attrs...),
 	}
@@ -137,7 +139,10 @@ func (h *hueHandler) WithGroup(name string) slog.Handler {
 		level:       h.level,
 		timeFormat:  h.timeFormat,
 		replaceAttr: h.replaceAttr,
+		withCaller:  h.withCaller,
+		withPrefix:  h.withPrefix,
 		group:       h.group + name + ".",
+		attrs:       h.attrs,
 	}
 }
 
