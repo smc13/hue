@@ -70,6 +70,8 @@ func (h *hueHandler) Enabled(_ context.Context, level slog.Level) bool {
 func (h *hueHandler) Handle(ctx context.Context, rec slog.Record) error {
 	buf := &buffer{}
 
+	rec.AddAttrs(h.attrs...)
+	
 	// write the time
 	if !rec.Time.IsZero() {
 		rec.Time.Round(0)
@@ -93,8 +95,6 @@ func (h *hueHandler) Handle(ctx context.Context, rec slog.Record) error {
 	// write the message
 	buf.WriteString(rec.Message)
 	buf.WriteString(" ")
-
-	rec.AddAttrs(h.attrs...)
 
 	rec.Attrs(func(a slog.Attr) bool {
 		h.writeAttr(buf, a, h.group)
