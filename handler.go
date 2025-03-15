@@ -28,9 +28,10 @@ type hueHandler struct {
 	timeFormat  string
 	replaceAttr func(groups []string, a slog.Attr) slog.Attr
 	withCaller  bool
+	withPrefix  bool
 
 	group string
-	attrs string
+	attrs []slog.Attr
 }
 
 // NewHueHandler creates a [slog.Handler] that writes pretty formatted logs to the given writer.
@@ -47,6 +48,7 @@ func NewHueHandler(writer io.Writer, options *Options) slog.Handler {
 
 	h.replaceAttr = options.ReplaceAttr
 	h.withCaller = options.WithCaller
+	h.withPrefix = options.WithPrefix
 
 	if options.TimeFormat != "" {
 		h.timeFormat = options.TimeFormat
@@ -84,12 +86,15 @@ func (h *hueHandler) Handle(ctx context.Context, rec slog.Record) error {
 		buf.WriteString(" ")
 	}
 
+	if h.withPrefix {
+		rec = h.writePrefix(buf, rec)
+	}
+
 	// write the message
 	buf.WriteString(rec.Message)
 	buf.WriteString(" ")
 
-	// write stored (pre-formatted) attributes
-	buf.WriteString(h.attrs)
+	rec.AddAttrs(h.attrs...)
 
 	rec.Attrs(func(a slog.Attr) bool {
 		h.writeAttr(buf, a, h.group)
@@ -111,18 +116,13 @@ func (h *hueHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 		return h
 	}
 
-	buf := &buffer{}
-	for _, a := range attrs {
-		h.writeAttr(buf, a, "")
-	}
-
 	return &hueHandler{
 		writer:      h.writer,
 		level:       h.level,
 		timeFormat:  h.timeFormat,
 		replaceAttr: h.replaceAttr,
 		group:       h.group,
-		attrs:       h.attrs + string(*buf),
+		attrs:       append(h.attrs, attrs...),
 	}
 }
 
@@ -206,14 +206,29 @@ func (h *hueHandler) writeAttrKey(buf *buffer, attr slog.Attr, prefix string) {
 }
 
 func (h *hueHandler) writeAttrValue(buf *buffer, attr slog.Attr) {
-	style := lipgloss.NewStyle()
+	style := h.attrStyle(attr, lipgloss.NewStyle())
+	h.writeStyledAttrValue(buf, attr, style, true)
+}
+
+func (h *hueHandler) attrStyle(attr slog.Attr, defaultStyle lipgloss.Style) lipgloss.Style {
 	if styledVal, ok := attr.Value.Any().(StyledAttr); ok {
-		style = styledVal.Style()
+		return styledVal.Style()
+	}
+
+	return defaultStyle
+}
+
+func (h *hueHandler) writeStyledAttrValue(buf *buffer, attr slog.Attr, style lipgloss.Style, quote bool) {
+	formatter := func(value string) string {
+		if quote {
+			return strconv.Quote(value)
+		}
+		return value
 	}
 
 	switch attr.Value.Kind() {
 	case slog.KindString:
-		*buf = append(*buf, style.Render(strconv.Quote(attr.Value.String()))...)
+		*buf = append(*buf, style.Render(formatter(attr.Value.String()))...)
 	case slog.KindBool:
 		*buf = append(*buf, style.Render(strconv.FormatBool(attr.Value.Bool()))...)
 	case slog.KindInt64:
@@ -223,7 +238,7 @@ func (h *hueHandler) writeAttrValue(buf *buffer, attr slog.Attr) {
 	case slog.KindFloat64:
 		*buf = append(*buf, style.Render(strconv.FormatFloat(attr.Value.Float64(), 'f', -1, 64))...)
 	case slog.KindTime:
-		*buf = append(*buf, style.Render(strconv.Quote(attr.Value.Time().String()))...)
+		*buf = append(*buf, style.Render(formatter(attr.Value.Time().String()))...)
 	case slog.KindDuration:
 		*buf = append(*buf, style.Render(attr.Value.Duration().String())...)
 	case slog.KindAny:
@@ -233,11 +248,11 @@ func (h *hueHandler) writeAttrValue(buf *buffer, attr slog.Attr) {
 			if err != nil {
 				break
 			}
-			*buf = append(*buf, style.Render(strconv.Quote(string(enc)))...)
+			*buf = append(*buf, style.Render(formatter(string(enc)))...)
 		case fmt.Stringer:
-			*buf = append(*buf, style.Render(strconv.Quote(avt.String()))...)
+			*buf = append(*buf, style.Render(formatter(avt.String()))...)
 		default:
-			*buf = append(*buf, style.Render(strconv.Quote(fmt.Sprintf("%+v", avt)))...)
+			*buf = append(*buf, style.Render(formatter(fmt.Sprintf("%+v", avt)))...)
 		}
 	}
 }
@@ -264,4 +279,38 @@ func (h *hueHandler) writeCaller(buf *buffer, pc uintptr) {
 
 	// write the caller
 	buf.WriteString(mutedStyle.Render(fmt.Sprintf("<%s:%d>", file, src.Line)))
+}
+
+func (h *hueHandler) writePrefix(buf *buffer, rec slog.Record) slog.Record {
+	// early return if theres no attributes on the record
+	if rec.NumAttrs() == 0 {
+		return rec
+	}
+
+	// find the last attribute marked as a prefix
+	var prefix *slog.Attr
+	attrs := make([]slog.Attr, 0, rec.NumAttrs())
+	rec.Attrs(func(a slog.Attr) bool {
+		if _, ok := a.Value.Any().(PrefixAttr); ok && prefix == nil {
+			prefix = &a
+		} else {
+			attrs = append(attrs, a)
+		}
+
+		return true
+	})
+
+	if prefix == nil {
+		return rec
+	}
+
+	style := h.attrStyle(*prefix, mutedStyle)
+	h.writeStyledAttrValue(buf, *prefix, style, false)
+	buf.WriteString(style.Render(":"))
+	buf.WriteString(" ")
+
+	// returned a cloned record without the attribute that was used as a prefix
+	newRec := slog.Record{Time: rec.Time, Level: rec.Level, Message: rec.Message}
+	newRec.AddAttrs(attrs...)
+	return newRec
 }

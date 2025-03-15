@@ -8,4 +8,5 @@ type Options struct {
 	SupportsColor bool
 	ReplaceAttr   func(groups []string, a slog.Attr) slog.Attr
 	WithCaller    bool
+	WithPrefix    bool
 }
