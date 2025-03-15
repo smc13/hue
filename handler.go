@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -15,87 +16,125 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-const (
-	DefaultTimeFormat = time.TimeOnly
-	DefaultLogLevel   = slog.LevelInfo
-)
+const DefaultLogLevel = slog.LevelInfo
+const DefaultTimeFormat = time.TimeOnly
 
 type hueHandler struct {
-	writer io.Writer
-	mx     sync.Mutex
+	w  io.Writer
+	mx *sync.Mutex
 
-	level       slog.Level
-	timeFormat  string
-	replaceAttr func(groups []string, a slog.Attr) slog.Attr
-	withCaller  bool
-	withPrefix  bool
+	opts Options
 
-	group string
-	attrs []slog.Attr
+	group  string
+	prefix buffer
+	attrs  buffer
 }
 
-// NewHueHandler creates a [slog.Handler] that writes pretty formatted logs to the given writer.
-func NewHueHandler(writer io.Writer, options *Options) slog.Handler {
+func New(w io.Writer, options *Options) *hueHandler {
 	h := &hueHandler{
-		writer:     writer,
-		timeFormat: DefaultTimeFormat,
-		level:      DefaultLogLevel,
+		w:  w,
+		mx: &sync.Mutex{},
+		opts: Options{
+			Level:      DefaultLogLevel,
+			TimeFormat: DefaultTimeFormat,
+			WithPrefix: true,
+			WithCaller: false,
+			ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+				return a
+			},
+		},
 	}
 
-	if options == nil {
-		return h
-	}
-
-	h.replaceAttr = options.ReplaceAttr
-	h.withCaller = options.WithCaller
-	h.withPrefix = options.WithPrefix
-
-	if options.TimeFormat != "" {
-		h.timeFormat = options.TimeFormat
-	}
-
-	if options.Level != nil {
-		h.level = options.Level.Level()
+	if options != nil {
+		h.opts = *options
 	}
 
 	return h
 }
 
-// Enabled implements slog.Handler.
-func (h *hueHandler) Enabled(_ context.Context, level slog.Level) bool {
-	return level >= h.level.Level()
+func (h *hueHandler) clone() *hueHandler {
+	return &hueHandler{
+		w:  h.w,
+		mx: h.mx,
+
+		opts: h.opts,
+
+		group:  h.group,
+		prefix: slices.Clip(h.prefix),
+		attrs:  slices.Clip(h.attrs),
+	}
 }
 
-// Handle implements slog.Handler.
+func (h *hueHandler) Enabled(_ context.Context, level slog.Level) bool {
+	minLevel := DefaultLogLevel
+	if h.opts.Level != nil {
+		minLevel = h.opts.Level.Level()
+	}
+
+	return level >= minLevel
+}
+
+func (h *hueHandler) WithGroup(name string) slog.Handler {
+	h2 := h.clone()
+	h2.group = h2.group + name + "."
+	return h2
+}
+
+func (h *hueHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	if len(attrs) == 0 {
+		return h
+	}
+
+	h2 := h.clone()
+
+	// we want to optimise this as best as possible
+	// we need to find and remove and Prefix attrs and update the current prefix
+	// we then want to preformat the remaining attributes
+	preBuf := buffer{}
+	attrBuf := buffer{}
+	for _, a := range attrs {
+		if _, ok := a.Value.Any().(PrefixAttr); ok {
+			h.writeStyledAttrValue(&preBuf, a, lipgloss.Style{}, false)
+			preBuf.WriteString(".")
+		} else {
+			h.writeAttr(&attrBuf, a, h.group)
+		}
+	}
+
+	h2.prefix.Write(preBuf)
+	h2.attrs.Write(attrBuf)
+
+	return h2
+}
+
 func (h *hueHandler) Handle(ctx context.Context, rec slog.Record) error {
 	buf := &buffer{}
 
-	rec.AddAttrs(h.attrs...)
-
-	// write the time
+	// write time
 	if !rec.Time.IsZero() {
 		rec.Time.Round(0)
 		h.writeTime(buf, rec.Time)
-		buf.WriteString(" ")
 	}
 
-	// write the level
+	// write level
 	h.writeLevel(buf, rec.Level)
-	buf.WriteString(" ")
 
-	if h.withCaller {
+	// write caller
+	if h.opts.WithCaller {
 		h.writeCaller(buf, rec.PC)
-		buf.WriteString(" ")
 	}
 
-	if h.withPrefix {
-		rec = h.writePrefix(buf, rec)
+	// write prefix
+	if h.opts.WithPrefix {
+		h.writePrefix(buf)
 	}
 
-	// write the message
+	// write message
 	buf.WriteString(rec.Message)
 	buf.WriteString(" ")
 
+	// write attributes
+	buf.Write(h.attrs)
 	rec.Attrs(func(a slog.Attr) bool {
 		h.writeAttr(buf, a, h.group)
 		return true
@@ -106,49 +145,13 @@ func (h *hueHandler) Handle(ctx context.Context, rec slog.Record) error {
 	h.mx.Lock()
 	defer h.mx.Unlock()
 
-	_, err := h.writer.Write(*buf)
+	_, err := h.w.Write(*buf)
 	return err
 }
 
-// WithAttrs implements slog.Handler.
-func (h *hueHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	if len(attrs) == 0 {
-		return h
-	}
-
-	return &hueHandler{
-		writer:      h.writer,
-		level:       h.level,
-		timeFormat:  h.timeFormat,
-		replaceAttr: h.replaceAttr,
-		withCaller:  h.withCaller,
-		withPrefix:  h.withPrefix,
-		group:       h.group,
-		attrs:       append(h.attrs, attrs...),
-	}
-}
-
-// WithGroup implements slog.Handler.
-func (h *hueHandler) WithGroup(name string) slog.Handler {
-	if name == "" {
-		return h
-	}
-
-	return &hueHandler{
-		writer:      h.writer,
-		level:       h.level,
-		timeFormat:  h.timeFormat,
-		replaceAttr: h.replaceAttr,
-		withCaller:  h.withCaller,
-		withPrefix:  h.withPrefix,
-		group:       h.group + name + ".",
-		attrs:       h.attrs,
-	}
-}
-
 func (h *hueHandler) writeTime(buf *buffer, t time.Time) {
-	if h.replaceAttr != nil {
-		attr := h.replaceAttr(nil, slog.Time(slog.TimeKey, t))
+	if h.opts.ReplaceAttr != nil {
+		attr := h.opts.ReplaceAttr(nil, slog.Time(slog.TimeKey, t))
 		if attr.Value.Kind() == slog.KindTime {
 			t = attr.Value.Time()
 		} else {
@@ -157,13 +160,14 @@ func (h *hueHandler) writeTime(buf *buffer, t time.Time) {
 		}
 	}
 
-	buf.WriteString(mutedStyle.Render(t.Format(h.timeFormat)))
+	buf.WriteString(mutedStyle.Render(t.Format(h.opts.TimeFormat)))
+	buf.WriteString(" ")
 }
 
 func (h *hueHandler) writeLevel(buf *buffer, level slog.Level) {
-	if h.replaceAttr != nil {
-		attr := h.replaceAttr(nil, slog.Any(slog.LevelKey, level))
-		buf.WriteString(attr.Value.String())
+	if h.opts.ReplaceAttr != nil {
+		attr := h.opts.ReplaceAttr(nil, slog.Any(slog.LevelKey, level))
+		buf.WriteString(attr.Value.String() + " ")
 		return
 	}
 
@@ -177,6 +181,42 @@ func (h *hueHandler) writeLevel(buf *buffer, level slog.Level) {
 	case slog.LevelError:
 		buf.WriteString(errorLevelStyle.Render("ERR"))
 	}
+
+	buf.WriteString(" ")
+}
+
+func (h *hueHandler) writeCaller(buf *buffer, pc uintptr) {
+	// grab the caller from the stack
+	frames := runtime.CallersFrames([]uintptr{pc})
+	frame, _ := frames.Next()
+
+	src := slog.Source{
+		Function: frame.Function,
+		File:     frame.File,
+		Line:     frame.Line,
+	}
+
+	if h.opts.ReplaceAttr != nil {
+		attr := h.opts.ReplaceAttr(nil, slog.Any("caller", &src))
+		if v, ok := attr.Value.Any().(*slog.Source); ok {
+			src = *v
+		}
+	}
+
+	_, file := filepath.Split(src.File)
+
+	// write the caller
+	buf.WriteString(mutedStyle.Render(fmt.Sprintf("<%s:%d>", file, src.Line)))
+	buf.WriteString(" ")
+}
+
+// writePrefix writes the prefix to the buffer, replacing the last character (.) with a colon and space.
+func (h *hueHandler) writePrefix(buf *buffer) {
+	if len(h.prefix) == 0 {
+		return
+	}
+
+	buf.WriteString(prefixStyle.Render(string(h.prefix[:len(h.prefix)-1]) + ": "))
 }
 
 func (h *hueHandler) writeAttr(buf *buffer, attr slog.Attr, prefix string) {
@@ -196,31 +236,31 @@ func (h *hueHandler) writeAttr(buf *buffer, attr slog.Attr, prefix string) {
 		return
 	}
 
-	h.writeAttrKey(buf, attr, prefix)
-	h.writeAttrValue(buf, attr)
+	style, found := h.attrStyle(attr, attrStyle)
+
+	h.writeAttrKey(buf, attr, style.Faint(true), prefix)
+	if !found {
+		// reset the style to default if not specified by the attribute
+		style = lipgloss.NewStyle()
+	}
+	h.writeAttrValue(buf, attr, style)
 	buf.WriteString(" ")
 }
 
-func (h *hueHandler) writeAttrKey(buf *buffer, attr slog.Attr, prefix string) {
-	style := attrStyle
+func (h *hueHandler) attrStyle(attr slog.Attr, defaultStyle lipgloss.Style) (lipgloss.Style, bool) {
 	if styledVal, ok := attr.Value.Any().(StyledAttr); ok {
-		style = styledVal.Style().Faint(true)
+		return styledVal.Style(), true
 	}
 
+	return defaultStyle, false
+}
+
+func (h *hueHandler) writeAttrKey(buf *buffer, attr slog.Attr, style lipgloss.Style, prefix string) {
 	buf.WriteString(style.Render(fmt.Sprintf("%s=", prefix+attr.Key)))
 }
 
-func (h *hueHandler) writeAttrValue(buf *buffer, attr slog.Attr) {
-	style := h.attrStyle(attr, lipgloss.NewStyle())
+func (h *hueHandler) writeAttrValue(buf *buffer, attr slog.Attr, style lipgloss.Style) {
 	h.writeStyledAttrValue(buf, attr, style, true)
-}
-
-func (h *hueHandler) attrStyle(attr slog.Attr, defaultStyle lipgloss.Style) lipgloss.Style {
-	if styledVal, ok := attr.Value.Any().(StyledAttr); ok {
-		return styledVal.Style()
-	}
-
-	return defaultStyle
 }
 
 func (h *hueHandler) writeStyledAttrValue(buf *buffer, attr slog.Attr, style lipgloss.Style, quote bool) {
@@ -260,62 +300,4 @@ func (h *hueHandler) writeStyledAttrValue(buf *buffer, attr slog.Attr, style lip
 			*buf = append(*buf, style.Render(formatter(fmt.Sprintf("%+v", avt)))...)
 		}
 	}
-}
-
-func (h *hueHandler) writeCaller(buf *buffer, pc uintptr) {
-	// grab the caller from the stack
-	frames := runtime.CallersFrames([]uintptr{pc})
-	frame, _ := frames.Next()
-
-	src := slog.Source{
-		Function: frame.Function,
-		File:     frame.File,
-		Line:     frame.Line,
-	}
-
-	if h.replaceAttr != nil {
-		attr := h.replaceAttr(nil, slog.Any("caller", &src))
-		if v, ok := attr.Value.Any().(*slog.Source); ok {
-			src = *v
-		}
-	}
-
-	_, file := filepath.Split(src.File)
-
-	// write the caller
-	buf.WriteString(mutedStyle.Render(fmt.Sprintf("<%s:%d>", file, src.Line)))
-}
-
-func (h *hueHandler) writePrefix(buf *buffer, rec slog.Record) slog.Record {
-	// early return if theres no attributes on the record
-	if rec.NumAttrs() == 0 {
-		return rec
-	}
-
-	// find the last attribute marked as a prefix
-	var prefix *slog.Attr
-	attrs := make([]slog.Attr, 0, rec.NumAttrs())
-	rec.Attrs(func(a slog.Attr) bool {
-		if _, ok := a.Value.Any().(PrefixAttr); ok && prefix == nil {
-			prefix = &a
-		} else {
-			attrs = append(attrs, a)
-		}
-
-		return true
-	})
-
-	if prefix == nil {
-		return rec
-	}
-
-	style := h.attrStyle(*prefix, mutedStyle)
-	h.writeStyledAttrValue(buf, *prefix, style, false)
-	buf.WriteString(style.Render(":"))
-	buf.WriteString(" ")
-
-	// returned a cloned record without the attribute that was used as a prefix
-	newRec := slog.Record{Time: rec.Time, Level: rec.Level, Message: rec.Message}
-	newRec.AddAttrs(attrs...)
-	return newRec
 }

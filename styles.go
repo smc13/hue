@@ -13,6 +13,6 @@ var (
 	warnLevelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
 	errorLevelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 
-	errorAttrStyle   = errorLevelStyle
-	serviceAttrStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("219"))
+	errorAttrStyle = errorLevelStyle
+	prefixStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("207"))
 )

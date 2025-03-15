@@ -34,9 +34,12 @@ func (e errorAttr) Style() lipgloss.Style { return errorAttrStyle }
 // serviceAttr is a custom slog.Attr that is used to style service names and mark them as log prefixes.
 type serviceAttr string
 
-func (s serviceAttr) Style() lipgloss.Style { return serviceAttrStyle }
+func (s serviceAttr) Style() lipgloss.Style { return prefixStyle }
 func (s serviceAttr) Prefix() bool          { return true }
 
+// Service is a custom `slog.Attr` that is used to style service names and mark them as log prefixes.
+// If not used with logger.WithAttrs, it will not be used as a prefix and instead be displayed as a regular attribute.
+// Works as a normal attribute when used with other handlers.
 func Service(name string) slog.Attr {
 	return slog.Any(ServiceKey, serviceAttr(name))
 }
