@@ -1,12 +1,14 @@
 package hue
 
-import "log/slog"
+import (
+	"log/slog"
+)
 
 type Options struct {
-	Level         slog.Leveler
-	TimeFormat    string
-	SupportsColor bool
-	ReplaceAttr   func(groups []string, a slog.Attr) slog.Attr
-	WithCaller    bool
-	WithPrefix    bool
+	Level       slog.Leveler
+	TimeFormat  string
+	ReplaceAttr func(groups []string, a slog.Attr) slog.Attr
+	AddSource   bool
+	AddPrefix   bool
+	Styles      *Styles
 }

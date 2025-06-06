@@ -26,6 +26,8 @@ type hueHandler struct {
 	opts Options
 
 	group  string
+	groups []string
+
 	prefix buffer
 	attrs  buffer
 }
@@ -37,16 +39,20 @@ func New(w io.Writer, options *Options) *hueHandler {
 		opts: Options{
 			Level:      DefaultLogLevel,
 			TimeFormat: DefaultTimeFormat,
-			WithPrefix: true,
-			WithCaller: false,
+			AddPrefix:  true,
+			AddSource:  false,
 			ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 				return a
 			},
+			Styles: DefaultStyles(),
 		},
 	}
 
 	if options != nil {
 		h.opts = *options
+		if h.opts.Styles == nil {
+			h.opts.Styles = DefaultStyles()
+		}
 	}
 
 	return h
@@ -60,6 +66,7 @@ func (h *hueHandler) clone() *hueHandler {
 		opts: h.opts,
 
 		group:  h.group,
+		groups: h.groups,
 		prefix: slices.Clip(h.prefix),
 		attrs:  slices.Clip(h.attrs),
 	}
@@ -76,7 +83,9 @@ func (h *hueHandler) Enabled(_ context.Context, level slog.Level) bool {
 
 func (h *hueHandler) WithGroup(name string) slog.Handler {
 	h2 := h.clone()
-	h2.group = h2.group + name + "."
+	h2.group += name + "."
+	h2.groups = append(h2.groups, name)
+
 	return h2
 }
 
@@ -97,7 +106,7 @@ func (h *hueHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 			h.writeStyledAttrValue(&preBuf, a, lipgloss.Style{}, false)
 			preBuf.WriteString(".")
 		} else {
-			h.writeAttr(&attrBuf, a, h.group)
+			h.writeAttr(&attrBuf, a, h.group, h.groups)
 		}
 	}
 
@@ -112,7 +121,6 @@ func (h *hueHandler) Handle(ctx context.Context, rec slog.Record) error {
 
 	// write time
 	if !rec.Time.IsZero() {
-		rec.Time.Round(0)
 		h.writeTime(buf, rec.Time)
 	}
 
@@ -120,12 +128,17 @@ func (h *hueHandler) Handle(ctx context.Context, rec slog.Record) error {
 	h.writeLevel(buf, rec.Level)
 
 	// write caller
-	if h.opts.WithCaller {
-		h.writeCaller(buf, rec.PC)
+	if h.opts.AddSource {
+		src := h.getSource(rec)
+		if src == nil {
+			src = &slog.Source{}
+		}
+
+		h.writeSource(buf, src)
 	}
 
 	// write prefix
-	if h.opts.WithPrefix {
+	if h.opts.AddPrefix {
 		h.writePrefix(buf)
 	}
 
@@ -134,11 +147,7 @@ func (h *hueHandler) Handle(ctx context.Context, rec slog.Record) error {
 	buf.WriteString(" ")
 
 	// write attributes
-	buf.Write(h.attrs)
-	rec.Attrs(func(a slog.Attr) bool {
-		h.writeAttr(buf, a, h.group)
-		return true
-	})
+	h.writeAttrs(buf, rec)
 
 	buf.WriteString("\n")
 
@@ -149,64 +158,53 @@ func (h *hueHandler) Handle(ctx context.Context, rec slog.Record) error {
 	return err
 }
 
-func (h *hueHandler) writeTime(buf *buffer, t time.Time) {
-	if h.opts.ReplaceAttr != nil {
-		attr := h.opts.ReplaceAttr(nil, slog.Time(slog.TimeKey, t))
-		if attr.Value.Kind() == slog.KindTime {
-			t = attr.Value.Time()
-		} else {
-			h.writeAttr(buf, attr, "")
-			return
-		}
-	}
-
-	buf.WriteString(mutedStyle.Render(t.Format(h.opts.TimeFormat)))
-	buf.WriteString(" ")
-}
-
-func (h *hueHandler) writeLevel(buf *buffer, level slog.Level) {
-	if h.opts.ReplaceAttr != nil {
-		attr := h.opts.ReplaceAttr(nil, slog.Any(slog.LevelKey, level))
-		buf.WriteString(attr.Value.String() + " ")
-		return
-	}
-
-	switch level {
-	case slog.LevelDebug:
-		buf.WriteString(debugLevelStyle.Render("DBG"))
-	case slog.LevelInfo:
-		buf.WriteString(infoLevelStyle.Render("INF"))
-	case slog.LevelWarn:
-		buf.WriteString(warnLevelStyle.Render("WRN"))
-	case slog.LevelError:
-		buf.WriteString(errorLevelStyle.Render("ERR"))
-	}
-
-	buf.WriteString(" ")
-}
-
-func (h *hueHandler) writeCaller(buf *buffer, pc uintptr) {
+// It appears future versions of Go will expose slog.Record.Source()
+// but for now we replicate its basic functionality here.
+func (h *hueHandler) getSource(rec slog.Record) *slog.Source {
 	// grab the caller from the stack
-	frames := runtime.CallersFrames([]uintptr{pc})
+	frames := runtime.CallersFrames([]uintptr{rec.PC})
 	frame, _ := frames.Next()
 
-	src := slog.Source{
+	src := &slog.Source{
 		Function: frame.Function,
 		File:     frame.File,
 		Line:     frame.Line,
 	}
 
 	if h.opts.ReplaceAttr != nil {
-		attr := h.opts.ReplaceAttr(nil, slog.Any("caller", &src))
+		attr := h.opts.ReplaceAttr(nil, slog.Any(slog.SourceKey, &src))
 		if v, ok := attr.Value.Any().(*slog.Source); ok {
-			src = *v
+			src = v
 		}
 	}
 
-	_, file := filepath.Split(src.File)
+	return src
+}
 
-	// write the caller
-	buf.WriteString(mutedStyle.Render(fmt.Sprintf("<%s:%d>", file, src.Line)))
+func (h *hueHandler) writeTime(buf *buffer, t time.Time) {
+	buf.WriteString(h.opts.Styles.Time.Render(t.Format(h.opts.TimeFormat)))
+	buf.WriteString(" ")
+}
+
+func (h *hueHandler) writeLevel(buf *buffer, level slog.Level) {
+	var style lipgloss.Style
+	if s, ok := h.opts.Styles.Levels[level]; ok {
+		style = s
+	} else {
+		style = h.opts.Styles.Attr.SetString(level.String())
+	}
+
+	buf.WriteString(style.String())
+	buf.WriteString(" ")
+}
+
+func (h *hueHandler) writeSource(buf *buffer, src *slog.Source) {
+	_, file := filepath.Split(src.File)
+	if file == "" {
+		return
+	}
+
+	buf.WriteString(h.opts.Styles.Source.Render(fmt.Sprintf("<%s:%d>", file, src.Line)))
 	buf.WriteString(" ")
 }
 
@@ -216,10 +214,26 @@ func (h *hueHandler) writePrefix(buf *buffer) {
 		return
 	}
 
-	buf.WriteString(prefixStyle.Render(string(h.prefix[:len(h.prefix)-1]) + ": "))
+	buf.WriteString(h.opts.Styles.Prefix.Render(string(h.prefix[:len(h.prefix)-1]) + " "))
 }
 
-func (h *hueHandler) writeAttr(buf *buffer, attr slog.Attr, prefix string) {
+func (h *hueHandler) writeAttrs(buf *buffer, rec slog.Record) {
+	// write the pre formatted attributes
+	if len(h.attrs) > 0 {
+		buf.Write(h.attrs)
+	}
+
+	rec.Attrs(func(a slog.Attr) bool {
+		h.writeAttr(buf, a, h.group, h.groups)
+		return true
+	})
+}
+
+func (h *hueHandler) writeAttr(buf *buffer, attr slog.Attr, prefix string, groups []string) {
+	if rep := h.opts.ReplaceAttr; rep != nil {
+		attr = rep(groups, attr)
+	}
+
 	if attr.Equal(slog.Attr{}) {
 		return
 	}
@@ -227,16 +241,19 @@ func (h *hueHandler) writeAttr(buf *buffer, attr slog.Attr, prefix string) {
 	if attr.Value.Kind() == slog.KindGroup {
 		if attr.Key != "" {
 			prefix = prefix + attr.Key + "."
+			groups = append(groups, attr.Key)
 		}
 
 		for _, groupAttrs := range attr.Value.Group() {
-			h.writeAttr(buf, groupAttrs, prefix)
+			h.writeAttr(buf, groupAttrs, prefix, groups)
 		}
 
 		return
 	}
 
-	style, found := h.attrStyle(attr, attrStyle)
+	var style lipgloss.Style
+	var found bool
+	attr.Value, style, found = h.attrStyle(attr)
 
 	h.writeAttrKey(buf, attr, style.Faint(true), prefix)
 	if !found {
@@ -247,12 +264,14 @@ func (h *hueHandler) writeAttr(buf *buffer, attr slog.Attr, prefix string) {
 	buf.WriteString(" ")
 }
 
-func (h *hueHandler) attrStyle(attr slog.Attr, defaultStyle lipgloss.Style) (lipgloss.Style, bool) {
+func (h *hueHandler) attrStyle(attr slog.Attr) (slog.Value, lipgloss.Style, bool) {
+	res := attr.Value.Resolve()
+
 	if styledVal, ok := attr.Value.Any().(StyledAttr); ok {
-		return styledVal.Style(), true
+		return res, styledVal.Style(), true
 	}
 
-	return defaultStyle, false
+	return res, h.opts.Styles.Attr, false
 }
 
 func (h *hueHandler) writeAttrKey(buf *buffer, attr slog.Attr, style lipgloss.Style, prefix string) {

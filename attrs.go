@@ -29,12 +29,12 @@ func Err(err error) slog.Attr {
 	return slog.Any(ErrKey, err)
 }
 
-func (e errorAttr) Style() lipgloss.Style { return errorAttrStyle }
+func (e errorAttr) Style() lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Color("1")) }
 
 // serviceAttr is a custom slog.Attr that is used to style service names and mark them as log prefixes.
 type serviceAttr string
 
-func (s serviceAttr) Style() lipgloss.Style { return prefixStyle }
+func (s serviceAttr) Style() lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Color("14")) }
 func (s serviceAttr) Prefix() bool          { return true }
 
 // Service is a custom `slog.Attr` that is used to style service names and mark them as log prefixes.
