@@ -44,7 +44,8 @@ func New(w io.Writer, options *Options) *hueHandler {
 			ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 				return a
 			},
-			Styles: DefaultStyles(),
+			Styles:     DefaultStyles(),
+			SourceLink: FileSourceLink,
 		},
 	}
 
@@ -204,11 +205,28 @@ func (h *hueHandler) writeSource(buf *buffer, src *slog.Source) {
 		return
 	}
 
-	buf.WriteString(h.opts.Styles.Source.Render(fmt.Sprintf("<%s:%d>", file, src.Line)))
+	var link string
+	if h.opts.SourceLink != nil {
+		link = h.opts.SourceLink(src)
+	}
+
+	text := fmt.Sprintf("<%s:%d>", file, src.Line)
+
+	if link == "" {
+		buf.WriteString(h.opts.Styles.Source.Render(text))
+	} else {
+		buf.WriteString(h.opts.Styles.Source.Render(hyperlink(link, text)))
+	}
+
 	buf.WriteString(" ")
 }
 
-// writePrefix writes the prefix to the buffer, replacing the last character (.) with a colon and space.
+// hyperlink creates a terminal-friendly hyperlink using the OSC 8 escape sequence.
+func hyperlink(url, label string) string {
+	return fmt.Sprintf("\x1b]8;;%s\x1b\\%s\x1b]8;;\x1b\\", url, label)
+}
+
+// writePrefix writes the prefix to the buffer, replacing the last character (.) with a space.
 func (h *hueHandler) writePrefix(buf *buffer) {
 	if len(h.prefix) == 0 {
 		return
