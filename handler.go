@@ -103,7 +103,7 @@ func (h *hueHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	preBuf := buffer{}
 	attrBuf := buffer{}
 	for _, a := range attrs {
-		if _, ok := a.Value.Any().(PrefixAttr); ok {
+		if _, ok := a.Value.Any().(PrefixAttr); ok && h.opts.AddPrefix {
 			h.writeStyledAttrValue(&preBuf, a, lipgloss.Style{}, false)
 			preBuf.WriteString(".")
 		} else {
