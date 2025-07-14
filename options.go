@@ -20,8 +20,36 @@ type Options struct {
 	SourceLink func(source *slog.Source) string
 	// AddPrefix determines whether Prefix attributes are rendered before the message.
 	AddPrefix bool
+	// Stacktrace specifies options for stack trace handling.
+	Stacktrace StacktraceOptions
 	// Styles defines the styling options for components of the log output.
 	Styles *Styles
+}
+
+type StacktraceOptions struct {
+	// StacktraceLevels specifies the log levels for which stack traces should be displayed.
+	// Stack traces are displayed after the main log message
+	Levels []slog.Level
+	// MaxFrames limits the number of frames displayed in the stack trace.
+	MaxFrames int
+}
+
+func DefaultOptions(level slog.Level) Options {
+	return Options{
+		Level:      level,
+		TimeFormat: DefaultTimeFormat,
+		AddPrefix:  true,
+		AddSource:  false,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			return a
+		},
+		Styles:     DefaultStyles(),
+		SourceLink: FileSourceLink,
+		Stacktrace: StacktraceOptions{
+			MaxFrames: 5,
+			Levels:    []slog.Level{slog.LevelError},
+		},
+	}
 }
 
 func FileSourceLink(source *slog.Source) string {

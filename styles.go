@@ -21,6 +21,15 @@ type Styles struct {
 	// Custom log levels can be added to customise the output
 	// eg: `Levels[slog.LevelDebug] = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).SetString("TRC")`
 	Levels map[slog.Level]lipgloss.Style
+
+	StackTrace StackTraceStyles
+}
+
+type StackTraceStyles struct {
+	Line       lipgloss.Style
+	Filepath   lipgloss.Style
+	LineNumber lipgloss.Style
+	Function   lipgloss.Style
 }
 
 func DefaultStyles() *Styles {
@@ -35,5 +44,15 @@ func DefaultStyles() *Styles {
 			slog.LevelWarn:  lipgloss.NewStyle().Foreground(lipgloss.Color("3")).SetString("WRN"),
 			slog.LevelError: lipgloss.NewStyle().Foreground(lipgloss.Color("1")).SetString("ERR"),
 		},
+		StackTrace: DefaultStacktraceStyles(),
+	}
+}
+
+func DefaultStacktraceStyles() StackTraceStyles {
+	return StackTraceStyles{
+		Line:       lipgloss.NewStyle().PaddingLeft(3).Foreground(lipgloss.Color("0")),
+		Filepath:   lipgloss.NewStyle().Foreground(lipgloss.Color("15")),
+		LineNumber: lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
+		Function:   lipgloss.NewStyle().Foreground(lipgloss.Color("5")),
 	}
 }

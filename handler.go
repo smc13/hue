@@ -34,19 +34,9 @@ type hueHandler struct {
 
 func New(w io.Writer, options *Options) *hueHandler {
 	h := &hueHandler{
-		w:  w,
-		mx: &sync.Mutex{},
-		opts: Options{
-			Level:      DefaultLogLevel,
-			TimeFormat: DefaultTimeFormat,
-			AddPrefix:  true,
-			AddSource:  false,
-			ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-				return a
-			},
-			Styles:     DefaultStyles(),
-			SourceLink: FileSourceLink,
-		},
+		w:    w,
+		mx:   &sync.Mutex{},
+		opts: DefaultOptions(DefaultLogLevel),
 	}
 
 	if options != nil {
@@ -151,6 +141,11 @@ func (h *hueHandler) Handle(ctx context.Context, rec slog.Record) error {
 	h.writeAttrs(buf, rec)
 
 	buf.WriteString("\n")
+
+	if h.shouldWriteStackTrace(rec.Level) {
+		// write stack trace if the level is in the stacktrace levels
+		h.writeStackTrace(buf, rec)
+	}
 
 	h.mx.Lock()
 	defer h.mx.Unlock()
@@ -335,6 +330,48 @@ func (h *hueHandler) writeStyledAttrValue(buf *buffer, attr slog.Attr, style lip
 			*buf = append(*buf, style.Render(formatter(avt.String()))...)
 		default:
 			*buf = append(*buf, style.Render(formatter(fmt.Sprintf("%+v", avt)))...)
+		}
+	}
+}
+
+func (h *hueHandler) shouldWriteStackTrace(level slog.Level) bool {
+	if h.opts.Stacktrace.Levels == nil || h.opts.Stacktrace.MaxFrames <= 0 {
+		return false
+	}
+
+	return slices.Contains(h.opts.Stacktrace.Levels, level)
+}
+
+// Output the stack trace as an indented list of function calls with coloured file and line numbers + links and function names.
+// eg:   - path/to/file.go:124 (shortened function name)
+func (h *hueHandler) writeStackTrace(buf *buffer, rec slog.Record) {
+	if rec.PC == 0 {
+		return
+	}
+
+	frames := runtime.CallersFrames([]uintptr{rec.PC})
+	for i := 0; i < h.opts.Stacktrace.MaxFrames; i++ {
+		frame, more := frames.Next()
+
+		line := h.opts.Styles.StackTrace.Line.Render("--- ")
+		file := h.opts.Styles.StackTrace.Filepath.Render(frame.File)
+		lineNumber := h.opts.Styles.StackTrace.LineNumber.Render(strconv.Itoa(frame.Line))
+		function := h.opts.Styles.StackTrace.Function.Render(filepath.Base(frame.Function))
+
+		fileText := fmt.Sprintf("%s:%s", file, lineNumber)
+		if h.opts.SourceLink != nil {
+			link := h.opts.SourceLink(&slog.Source{
+				File: frame.File,
+				Line: frame.Line,
+			})
+			if link != "" {
+				fileText = hyperlink(link, fileText)
+			}
+		}
+
+		buf.WriteString(line + fileText + " (" + function + ")\n")
+		if !more {
+			break
 		}
 	}
 }
