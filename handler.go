@@ -142,7 +142,7 @@ func (h *hueHandler) Handle(ctx context.Context, rec slog.Record) error {
 
 	buf.WriteString("\n")
 
-	if h.shouldWriteStackTrace(rec.Level) {
+	if h.shouldWriteStackTrace(rec) {
 		// write stack trace if the level is in the stacktrace levels
 		h.writeStackTrace(buf, rec)
 	}
@@ -334,12 +334,12 @@ func (h *hueHandler) writeStyledAttrValue(buf *buffer, attr slog.Attr, style lip
 	}
 }
 
-func (h *hueHandler) shouldWriteStackTrace(level slog.Level) bool {
-	if h.opts.Stacktrace.Levels == nil || h.opts.Stacktrace.MaxFrames <= 0 {
+func (h *hueHandler) shouldWriteStackTrace(rec slog.Record) bool {
+	if h.opts.Stacktrace.MaxFrames <= 0 || h.opts.Stacktrace.ShouldDisplay == nil {
 		return false
 	}
 
-	return slices.Contains(h.opts.Stacktrace.Levels, level)
+	return h.opts.Stacktrace.ShouldDisplay(rec)
 }
 
 // Output the stack trace as an indented list of function calls with coloured file and line numbers + links and function names.
