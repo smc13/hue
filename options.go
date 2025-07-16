@@ -27,11 +27,13 @@ type Options struct {
 }
 
 type StacktraceOptions struct {
-	// StacktraceLevels specifies the log levels for which stack traces should be displayed.
-	// Stack traces are displayed after the main log message
-	Levels []slog.Level
-	// MaxFrames limits the number of frames displayed in the stack trace.
+	// DisplayLastFrames limits the number of frames displayed in the stack trace.
+	DisplayLastFrames int
+	// MaxFrames limits the total number of frames processed in the stack trace.
+	// This is check before DisplayLastFrames and can be used to limit the number of frames processed.
 	MaxFrames int
+	// ShouldDisplay is a function that determines whether to display the stack trace for a given log record.
+	ShouldDisplay func(record slog.Record) bool
 }
 
 func DefaultOptions(level slog.Level) Options {
@@ -46,8 +48,11 @@ func DefaultOptions(level slog.Level) Options {
 		Styles:     DefaultStyles(),
 		SourceLink: FileSourceLink,
 		Stacktrace: StacktraceOptions{
-			MaxFrames: 5,
-			Levels:    []slog.Level{slog.LevelError},
+			DisplayLastFrames: 5,
+			MaxFrames:         32,
+			ShouldDisplay: func(record slog.Record) bool {
+				return record.Level >= slog.LevelError
+			},
 		},
 	}
 }

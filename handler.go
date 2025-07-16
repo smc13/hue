@@ -335,7 +335,7 @@ func (h *hueHandler) writeStyledAttrValue(buf *buffer, attr slog.Attr, style lip
 }
 
 func (h *hueHandler) shouldWriteStackTrace(rec slog.Record) bool {
-	if h.opts.Stacktrace.MaxFrames <= 0 || h.opts.Stacktrace.ShouldDisplay == nil {
+	if h.opts.Stacktrace.DisplayLastFrames <= 0 || h.opts.Stacktrace.ShouldDisplay == nil {
 		return false
 	}
 
@@ -349,14 +349,27 @@ func (h *hueHandler) writeStackTrace(buf *buffer, rec slog.Record) {
 		return
 	}
 
-	frames := runtime.CallersFrames([]uintptr{rec.PC})
-	for i := 0; i < h.opts.Stacktrace.MaxFrames; i++ {
-		frame, more := frames.Next()
 
+	callers := make([]uintptr, h.opts.Stacktrace.MaxFrames)
+	n := runtime.Callers(0, callers)
+	callers = callers[:n]
+
+	// we need to reduce the slice down to the frames after and including the record's PC
+	for i, pc := range callers {
+		if pc == rec.PC {
+			callers = callers[i:]
+			break
+		}
+	}
+
+	frames := runtime.CallersFrames(callers)
+	filteredFrames := filterStacktraceFrames(frames)[:h.opts.Stacktrace.DisplayLastFrames]
+
+	for _, frame := range filteredFrames {
 		line := h.opts.Styles.StackTrace.Line.Render("--- ")
-		file := h.opts.Styles.StackTrace.Filepath.Render(frame.File)
+		file := h.opts.Styles.StackTrace.Filepath.Render(cleanFramePath(frame.File))
 		lineNumber := h.opts.Styles.StackTrace.LineNumber.Render(strconv.Itoa(frame.Line))
-		function := h.opts.Styles.StackTrace.Function.Render(filepath.Base(frame.Function))
+		function := h.opts.Styles.StackTrace.Function.Render(formatFunctionName(frame.Function))
 
 		fileText := fmt.Sprintf("%s:%s", file, lineNumber)
 		if h.opts.SourceLink != nil {
@@ -370,8 +383,5 @@ func (h *hueHandler) writeStackTrace(buf *buffer, rec slog.Record) {
 		}
 
 		buf.WriteString(line + fileText + " (" + function + ")\n")
-		if !more {
-			break
-		}
 	}
 }
