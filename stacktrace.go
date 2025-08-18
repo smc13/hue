@@ -7,6 +7,13 @@ import (
 	"strings"
 )
 
+// Subset of the runtime.Frame struct to represent a stack frame
+type StackFrame struct {
+	Function string // The name of the function
+	File     string // The file path of the stack frame
+	Line     int    // The line number in the file
+}
+
 // filterStacktraceFrames filters the stack trace frames to only include those that are relevant
 // ignoring frames from go runtime and other internal packages.
 func filterStacktraceFrames(frames *runtime.Frames) []runtime.Frame {

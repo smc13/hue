@@ -3,6 +3,7 @@ package hue
 import (
 	"fmt"
 	"log/slog"
+	"runtime"
 )
 
 type Options struct {
@@ -34,7 +35,10 @@ type StacktraceOptions struct {
 	MaxFrames int
 	// ShouldDisplay is a function that determines whether to display the stack trace for a given log record.
 	ShouldDisplay func(record slog.Record) bool
+	StackProvider StackProvider
 }
+
+type StackProvider func(record slog.Record) []StackFrame
 
 func DefaultOptions(level slog.Level) Options {
 	return Options{
@@ -49,10 +53,8 @@ func DefaultOptions(level slog.Level) Options {
 		SourceLink: FileSourceLink,
 		Stacktrace: StacktraceOptions{
 			DisplayLastFrames: 5,
-			MaxFrames:         32,
-			ShouldDisplay: func(record slog.Record) bool {
-				return record.Level >= slog.LevelError
-			},
+			ShouldDisplay:     func(record slog.Record) bool { return record.Level >= slog.LevelError },
+			StackProvider:     DefaultStackProvider(32),
 		},
 	}
 }
@@ -71,4 +73,33 @@ func VscodeSourceLink(source *slog.Source) string {
 	}
 
 	return fmt.Sprintf("vscode://file/%s:%d", source.File, source.Line)
+}
+
+func DefaultStackProvider(maxFrames int) StackProvider {
+	return func(rec slog.Record) []StackFrame {
+		callers := make([]uintptr, maxFrames)
+		n := runtime.Callers(0, callers)
+		callers = callers[:n]
+
+		// we need to reduce the slice down to the frames after and including the record's PC
+		for i, pc := range callers {
+			if pc == rec.PC {
+				callers = callers[i:]
+				break
+			}
+		}
+
+		frames := filterStacktraceFrames(runtime.CallersFrames(callers))
+
+		returnFrames := make([]StackFrame, 0, len(frames))
+		for _, frame := range frames {
+			returnFrames = append(returnFrames, StackFrame{
+				Function: formatFunctionName(frame.Function),
+				File:     cleanFramePath(frame.File),
+				Line:     frame.Line,
+			})
+		}
+
+		return returnFrames
+	}
 }

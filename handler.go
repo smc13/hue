@@ -349,39 +349,29 @@ func (h *hueHandler) writeStackTrace(buf *buffer, rec slog.Record) {
 		return
 	}
 
-
-	callers := make([]uintptr, h.opts.Stacktrace.MaxFrames)
-	n := runtime.Callers(0, callers)
-	callers = callers[:n]
-
-	// we need to reduce the slice down to the frames after and including the record's PC
-	for i, pc := range callers {
-		if pc == rec.PC {
-			callers = callers[i:]
-			break
-		}
+	frames := h.opts.Stacktrace.StackProvider(rec)
+	if len(frames) == 0 {
+		return
 	}
 
-	frames := runtime.CallersFrames(callers)
-	filteredFrames := filterStacktraceFrames(frames)[:h.opts.Stacktrace.DisplayLastFrames]
+	if len(frames) > h.opts.Stacktrace.DisplayLastFrames {
+		frames = frames[len(frames)-h.opts.Stacktrace.DisplayLastFrames:]
+	}
 
-	for _, frame := range filteredFrames {
+	for _, frame := range frames {
 		line := h.opts.Styles.StackTrace.Line.Render("--- ")
 		file := h.opts.Styles.StackTrace.Filepath.Render(cleanFramePath(frame.File))
 		lineNumber := h.opts.Styles.StackTrace.LineNumber.Render(strconv.Itoa(frame.Line))
-		function := h.opts.Styles.StackTrace.Function.Render(formatFunctionName(frame.Function))
+		function := h.opts.Styles.StackTrace.Function.Render(fmt.Sprintf("(%s)", formatFunctionName(frame.Function)))
 
 		fileText := fmt.Sprintf("%s:%s", file, lineNumber)
 		if h.opts.SourceLink != nil {
-			link := h.opts.SourceLink(&slog.Source{
-				File: frame.File,
-				Line: frame.Line,
-			})
+			link := h.opts.SourceLink(&slog.Source{File: frame.File, Line: frame.Line})
 			if link != "" {
 				fileText = hyperlink(link, fileText)
 			}
 		}
 
-		buf.WriteString(line + fileText + " (" + function + ")\n")
+		buf.WriteString(line + fileText + " " + function + "\n")
 	}
 }

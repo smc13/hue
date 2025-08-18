@@ -39,7 +39,7 @@ func DefaultStyles() *Styles {
 		Prefix: lipgloss.NewStyle().Foreground(lipgloss.Color("14")),
 		Source: lipgloss.NewStyle().Foreground(lipgloss.Color("0")),
 		Levels: map[slog.Level]lipgloss.Style{
-			slog.LevelDebug: lipgloss.NewStyle().Foreground(lipgloss.Color("15")).SetString("DBG"),
+			slog.LevelDebug: lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Faint(true).SetString("DBG"),
 			slog.LevelInfo:  lipgloss.NewStyle().Foreground(lipgloss.Color("4")).SetString("INF"),
 			slog.LevelWarn:  lipgloss.NewStyle().Foreground(lipgloss.Color("3")).SetString("WRN"),
 			slog.LevelError: lipgloss.NewStyle().Foreground(lipgloss.Color("1")).SetString("ERR"),
