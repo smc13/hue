@@ -28,17 +28,13 @@ type Options struct {
 }
 
 type StacktraceOptions struct {
-	// DisplayLastFrames limits the number of frames displayed in the stack trace.
-	DisplayLastFrames int
-	// MaxFrames limits the total number of frames processed in the stack trace.
-	// This is check before DisplayLastFrames and can be used to limit the number of frames processed.
-	MaxFrames int
 	// ShouldDisplay is a function that determines whether to display the stack trace for a given log record.
 	ShouldDisplay func(record slog.Record) bool
+	// StackProvider generates the stack trace frames for a log record and returns them as a slice of runtime.Frame.
 	StackProvider StackProvider
 }
 
-type StackProvider func(record slog.Record) []StackFrame
+type StackProvider func(record slog.Record) []runtime.Frame
 
 func DefaultOptions(level slog.Level) Options {
 	return Options{
@@ -52,9 +48,8 @@ func DefaultOptions(level slog.Level) Options {
 		Styles:     DefaultStyles(),
 		SourceLink: FileSourceLink,
 		Stacktrace: StacktraceOptions{
-			DisplayLastFrames: 5,
-			ShouldDisplay:     func(record slog.Record) bool { return record.Level >= slog.LevelError },
-			StackProvider:     DefaultStackProvider(32),
+			ShouldDisplay: func(record slog.Record) bool { return record.Level >= slog.LevelError },
+			StackProvider: DefaultStackProvider(32, 5),
 		},
 	}
 }
@@ -75,8 +70,8 @@ func VscodeSourceLink(source *slog.Source) string {
 	return fmt.Sprintf("vscode://file/%s:%d", source.File, source.Line)
 }
 
-func DefaultStackProvider(maxFrames int) StackProvider {
-	return func(rec slog.Record) []StackFrame {
+func DefaultStackProvider(maxFrames int, displayFrames int) StackProvider {
+	return func(rec slog.Record) []runtime.Frame {
 		callers := make([]uintptr, maxFrames)
 		n := runtime.Callers(0, callers)
 		callers = callers[:n]
@@ -90,10 +85,14 @@ func DefaultStackProvider(maxFrames int) StackProvider {
 		}
 
 		frames := filterStacktraceFrames(runtime.CallersFrames(callers))
+		if len(frames) > displayFrames {
+			// if we have more frames than we want to display, slice it down
+			frames = frames[len(frames)-displayFrames:]
+		}
 
-		returnFrames := make([]StackFrame, 0, len(frames))
+		returnFrames := make([]runtime.Frame, 0, len(frames))
 		for _, frame := range frames {
-			returnFrames = append(returnFrames, StackFrame{
+			returnFrames = append(returnFrames, runtime.Frame{
 				Function: formatFunctionName(frame.Function),
 				File:     cleanFramePath(frame.File),
 				Line:     frame.Line,

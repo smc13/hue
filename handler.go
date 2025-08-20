@@ -335,7 +335,7 @@ func (h *hueHandler) writeStyledAttrValue(buf *buffer, attr slog.Attr, style lip
 }
 
 func (h *hueHandler) shouldWriteStackTrace(rec slog.Record) bool {
-	if h.opts.Stacktrace.DisplayLastFrames <= 0 || h.opts.Stacktrace.ShouldDisplay == nil {
+	if h.opts.Stacktrace.ShouldDisplay == nil {
 		return false
 	}
 
@@ -352,10 +352,6 @@ func (h *hueHandler) writeStackTrace(buf *buffer, rec slog.Record) {
 	frames := h.opts.Stacktrace.StackProvider(rec)
 	if len(frames) == 0 {
 		return
-	}
-
-	if len(frames) > h.opts.Stacktrace.DisplayLastFrames {
-		frames = frames[len(frames)-h.opts.Stacktrace.DisplayLastFrames:]
 	}
 
 	for _, frame := range frames {
