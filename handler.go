@@ -2,18 +2,19 @@ package hue
 
 import (
 	"context"
-	"encoding"
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
-	"strconv"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/colorprofile"
+	"github.com/charmbracelet/x/term"
 )
 
 const DefaultLogLevel = slog.LevelInfo
@@ -28,35 +29,111 @@ type hueHandler struct {
 	group  string
 	groups []string
 
-	prefix buffer
-	attrs  buffer
+	scope string
+	attrs []attrNode
+
+	colorProfile colorprofile.Profile
+	width        int
 }
 
 func New(w io.Writer, options *Options) *hueHandler {
-	h := &hueHandler{
-		w:  w,
-		mx: &sync.Mutex{},
-		opts: Options{
-			Level:      DefaultLogLevel,
-			TimeFormat: DefaultTimeFormat,
-			AddPrefix:  true,
-			AddSource:  false,
-			ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-				return a
-			},
-			Styles:     DefaultStyles(),
-			SourceLink: FileSourceLink,
-		},
+	opts := defaultOptions()
+	if options != nil {
+		opts.mergeFrom(options)
 	}
 
-	if options != nil {
-		h.opts = *options
-		if h.opts.Styles == nil {
-			h.opts.Styles = DefaultStyles()
-		}
+	h := &hueHandler{
+		w:    w,
+		mx:   &sync.Mutex{},
+		opts: opts,
+	}
+
+	h.colorProfile = detectColorProfile(w, h.opts.Color)
+	h.width = h.opts.Width
+	if h.width == 0 {
+		h.width = detectWidth(w)
 	}
 
 	return h
+}
+
+// defaultOptions returns hue's default Options.
+func defaultOptions() Options {
+	return Options{
+		Level:      DefaultLogLevel,
+		TimeFormat: DefaultTimeFormat,
+		AddScope:   true,
+		AddSource:  false,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			return a
+		},
+		Styles:     DefaultStyles(),
+		SourceLink: FileSourceLink,
+		View:       NewCompactView(),
+	}
+}
+
+// mergeFrom overlays the fields o explicitly sets onto opts, leaving opts'
+// defaults in place for anything o leaves at its zero value.
+func (opts *Options) mergeFrom(o *Options) {
+	if o.Level != nil {
+		opts.Level = o.Level
+	}
+
+	if o.TimeFormat != "" {
+		opts.TimeFormat = o.TimeFormat
+	}
+
+	if o.ReplaceAttr != nil {
+		opts.ReplaceAttr = o.ReplaceAttr
+	}
+
+	if o.SourceLink != nil {
+		opts.SourceLink = o.SourceLink
+	}
+
+	if o.Styles != nil {
+		opts.Styles = o.Styles
+	}
+
+	if o.View != nil {
+		opts.View = o.View
+	}
+
+	opts.Color = o.Color
+	opts.Width = o.Width
+	opts.AddSource = o.AddSource
+	opts.AddScope = o.AddScope
+}
+
+// detectColorProfile resolves the color profile to render with, honoring an
+// explicit ColorMode override, or auto-detecting from the destination writer
+// and environment (respecting NO_COLOR/CLICOLOR/CLICOLOR_FORCE) otherwise.
+func detectColorProfile(w io.Writer, mode ColorMode) colorprofile.Profile {
+	switch mode {
+	case ColorAlways:
+		return colorprofile.TrueColor
+	case ColorNever:
+		return colorprofile.NoTTY
+	default:
+		return colorprofile.Detect(w, os.Environ())
+	}
+}
+
+// detectWidth auto-detects the terminal width of w, returning 0 (unbounded)
+// if w isn't a terminal.
+func detectWidth(w io.Writer) int {
+	f, ok := w.(interface{ Fd() uintptr })
+	if !ok || !term.IsTerminal(f.Fd()) {
+		return 0
+	}
+
+	width, _, err := term.GetSize(f.Fd())
+	if err != nil {
+		return 0
+	}
+
+	return width
 }
 
 func (h *hueHandler) clone() *hueHandler {
@@ -68,8 +145,11 @@ func (h *hueHandler) clone() *hueHandler {
 
 		group:  h.group,
 		groups: h.groups,
-		prefix: slices.Clip(h.prefix),
+		scope:  h.scope,
 		attrs:  slices.Clip(h.attrs),
+
+		colorProfile: h.colorProfile,
+		width:        h.width,
 	}
 }
 
@@ -98,64 +178,71 @@ func (h *hueHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	h2 := h.clone()
 
 	// we want to optimise this as best as possible
-	// we need to find and remove and Prefix attrs and update the current prefix
+	// we need to find and remove any Scope attrs and update the current scope
 	// we then want to preformat the remaining attributes
-	preBuf := buffer{}
-	attrBuf := buffer{}
+	scope := strings.Builder{}
+	nodes := make([]attrNode, 0, len(attrs))
 	for _, a := range attrs {
-		if _, ok := a.Value.Any().(PrefixAttr); ok && h.opts.AddPrefix {
-			h.writeStyledAttrValue(&preBuf, a, lipgloss.Style{}, false)
-			preBuf.WriteString(".")
-		} else {
-			h.writeAttr(&attrBuf, a, h.group, h.groups)
+		if _, ok := a.Value.Any().(ScopeAttr); ok && h.opts.AddScope {
+			text, _ := attrValueText(a.Value.Resolve())
+			scope.Write([]byte(text + "."))
+			continue
+		}
+
+		if node, ok := h.buildAttrNode(a, h.groups); ok {
+			nodes = append(nodes, node)
 		}
 	}
 
-	h2.prefix.Write(preBuf)
-	h2.attrs.Write(attrBuf)
+	h2.scope = scope.String()
+	h2.attrs = append(slices.Clip(h.attrs), nodes...)
 
 	return h2
 }
 
 func (h *hueHandler) Handle(ctx context.Context, rec slog.Record) error {
-	buf := &buffer{}
-
-	// write time
-	if !rec.Time.IsZero() {
-		h.writeTime(buf, rec.Time)
+	line := Line{
+		Level:   rec.Level,
+		Time:    rec.Time,
+		HasTime: !rec.Time.IsZero(),
+		Message: rec.Message,
 	}
 
-	// write level
-	h.writeLevel(buf, rec.Level)
+	if h.opts.AddScope {
+		line.Scope = strings.TrimSuffix(h.scope, ".")
+	}
 
-	// write caller
+	attrs := make([]attrNode, 0, len(h.attrs)+rec.NumAttrs()+1)
+
 	if h.opts.AddSource {
-		src := h.getSource(rec)
-		if src == nil {
-			src = &slog.Source{}
+		if node, ok := h.sourceAttrNode(rec); ok {
+			attrs = append(attrs, node)
 		}
-
-		h.writeSource(buf, src)
 	}
 
-	// write prefix
-	if h.opts.AddPrefix {
-		h.writePrefix(buf)
-	}
+	attrs = append(attrs, h.attrs...)
 
-	// write message
-	buf.WriteString(rec.Message)
-	buf.WriteString(" ")
+	rec.Attrs(func(a slog.Attr) bool {
+		if node, ok := h.buildAttrNode(a, h.groups); ok {
+			attrs = append(attrs, node)
+		}
+		return true
+	})
 
-	// write attributes
-	h.writeAttrs(buf, rec)
+	line.Attrs = attrs
 
-	buf.WriteString("\n")
+	buf := &buffer{}
+	h.opts.View.Render(buf, renderContext{
+		Styles:     h.opts.Styles,
+		Width:      h.width,
+		TimeFormat: h.opts.TimeFormat,
+	}, line)
 
 	h.mx.Lock()
 	defer h.mx.Unlock()
 
-	_, err := h.w.Write(*buf)
+	out := &colorprofile.Writer{Forward: h.w, Profile: h.colorProfile}
+	_, err := out.Write(*buf)
 	return err
 }
 
@@ -182,27 +269,17 @@ func (h *hueHandler) getSource(rec slog.Record) *slog.Source {
 	return src
 }
 
-func (h *hueHandler) writeTime(buf *buffer, t time.Time) {
-	buf.WriteString(h.opts.Styles.Time.Render(t.Format(h.opts.TimeFormat)))
-	buf.WriteString(" ")
-}
-
-func (h *hueHandler) writeLevel(buf *buffer, level slog.Level) {
-	var style lipgloss.Style
-	if s, ok := h.opts.Styles.Levels[level]; ok {
-		style = s
-	} else {
-		style = h.opts.Styles.Attr.SetString(level.String())
+// sourceAttrNode builds the "source" attribute for rec, when AddSource is
+// enabled. ok is false when there's no source file to report.
+func (h *hueHandler) sourceAttrNode(rec slog.Record) (attrNode, bool) {
+	src := h.getSource(rec)
+	if src == nil {
+		src = &slog.Source{}
 	}
 
-	buf.WriteString(style.String())
-	buf.WriteString(" ")
-}
-
-func (h *hueHandler) writeSource(buf *buffer, src *slog.Source) {
 	_, file := filepath.Split(src.File)
 	if file == "" {
-		return
+		return attrNode{}, false
 	}
 
 	var link string
@@ -210,131 +287,18 @@ func (h *hueHandler) writeSource(buf *buffer, src *slog.Source) {
 		link = h.opts.SourceLink(src)
 	}
 
-	text := fmt.Sprintf("<%s:%d>", file, src.Line)
-
-	if link == "" {
-		buf.WriteString(h.opts.Styles.Source.Render(text))
-	} else {
-		buf.WriteString(h.opts.Styles.Source.Render(hyperlink(link, text)))
+	text := fmt.Sprintf("%s:%d", file, src.Line)
+	if link != "" {
+		text = hyperlink(link, text)
 	}
 
-	buf.WriteString(" ")
+	return attrNode{
+		key:   "source",
+		value: h.opts.Styles.Source.Render(text),
+	}, true
 }
 
 // hyperlink creates a terminal-friendly hyperlink using the OSC 8 escape sequence.
 func hyperlink(url, label string) string {
 	return fmt.Sprintf("\x1b]8;;%s\x1b\\%s\x1b]8;;\x1b\\", url, label)
-}
-
-// writePrefix writes the prefix to the buffer, replacing the last character (.) with a space.
-func (h *hueHandler) writePrefix(buf *buffer) {
-	if len(h.prefix) == 0 {
-		return
-	}
-
-	buf.WriteString(h.opts.Styles.Prefix.Render(string(h.prefix[:len(h.prefix)-1]) + " "))
-}
-
-func (h *hueHandler) writeAttrs(buf *buffer, rec slog.Record) {
-	// write the pre formatted attributes
-	if len(h.attrs) > 0 {
-		buf.Write(h.attrs)
-	}
-
-	rec.Attrs(func(a slog.Attr) bool {
-		h.writeAttr(buf, a, h.group, h.groups)
-		return true
-	})
-}
-
-func (h *hueHandler) writeAttr(buf *buffer, attr slog.Attr, prefix string, groups []string) {
-	if rep := h.opts.ReplaceAttr; rep != nil {
-		attr = rep(groups, attr)
-	}
-
-	if attr.Equal(slog.Attr{}) {
-		return
-	}
-
-	if attr.Value.Kind() == slog.KindGroup {
-		if attr.Key != "" {
-			prefix = prefix + attr.Key + "."
-			groups = append(groups, attr.Key)
-		}
-
-		for _, groupAttrs := range attr.Value.Group() {
-			h.writeAttr(buf, groupAttrs, prefix, groups)
-		}
-
-		return
-	}
-
-	var style lipgloss.Style
-	var found bool
-	attr.Value, style, found = h.attrStyle(attr)
-
-	h.writeAttrKey(buf, attr, style.Faint(true), prefix)
-	if !found {
-		// reset the style to default if not specified by the attribute
-		style = lipgloss.NewStyle()
-	}
-	h.writeAttrValue(buf, attr, style)
-	buf.WriteString(" ")
-}
-
-func (h *hueHandler) attrStyle(attr slog.Attr) (slog.Value, lipgloss.Style, bool) {
-	res := attr.Value.Resolve()
-
-	if styledVal, ok := attr.Value.Any().(StyledAttr); ok {
-		return res, styledVal.Style(), true
-	}
-
-	return res, h.opts.Styles.Attr, false
-}
-
-func (h *hueHandler) writeAttrKey(buf *buffer, attr slog.Attr, style lipgloss.Style, prefix string) {
-	buf.WriteString(style.Render(fmt.Sprintf("%s=", prefix+attr.Key)))
-}
-
-func (h *hueHandler) writeAttrValue(buf *buffer, attr slog.Attr, style lipgloss.Style) {
-	h.writeStyledAttrValue(buf, attr, style, true)
-}
-
-func (h *hueHandler) writeStyledAttrValue(buf *buffer, attr slog.Attr, style lipgloss.Style, quote bool) {
-	formatter := func(value string) string {
-		if quote {
-			return strconv.Quote(value)
-		}
-		return value
-	}
-
-	switch attr.Value.Kind() {
-	case slog.KindString:
-		*buf = append(*buf, style.Render(formatter(attr.Value.String()))...)
-	case slog.KindBool:
-		*buf = append(*buf, style.Render(strconv.FormatBool(attr.Value.Bool()))...)
-	case slog.KindInt64:
-		*buf = append(*buf, style.Render(strconv.FormatInt(attr.Value.Int64(), 10))...)
-	case slog.KindUint64:
-		*buf = append(*buf, style.Render(strconv.FormatUint(attr.Value.Uint64(), 10))...)
-	case slog.KindFloat64:
-		*buf = append(*buf, style.Render(strconv.FormatFloat(attr.Value.Float64(), 'f', -1, 64))...)
-	case slog.KindTime:
-		*buf = append(*buf, style.Render(formatter(attr.Value.Time().String()))...)
-	case slog.KindDuration:
-		*buf = append(*buf, style.Render(attr.Value.Duration().String())...)
-	case slog.KindAny:
-		switch avt := attr.Value.Any().(type) {
-		case encoding.TextMarshaler:
-			enc, err := avt.MarshalText()
-			if err != nil {
-				break
-			}
-			*buf = append(*buf, style.Render(formatter(string(enc)))...)
-		case fmt.Stringer:
-			*buf = append(*buf, style.Render(formatter(avt.String()))...)
-		default:
-			*buf = append(*buf, style.Render(formatter(fmt.Sprintf("%+v", avt)))...)
-		}
-	}
 }
